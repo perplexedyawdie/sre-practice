@@ -6,6 +6,46 @@ activate hidden feature-flag scenarios in a running demo.
 
 All SLA and SLO values in the starter bank are hypothetical training examples.
 
+## What is included
+
+- A local Streamlit app with four progressive SRE learning levels.
+- A versioned, swappable YAML question bank with 12 e-commerce scenarios.
+- Guided prompts for observations, diagnosis, PromQL, and incident response.
+- Direct links to the Astronomy Shop storefront, Locust, Grafana, and Jaeger.
+- Safe feature-flag activation with a persistent recovery snapshot and conflict
+  detection.
+- Local progress, self-assessment scores, and saved responses under `.state/`.
+
+## Learning flow
+
+1. Select a level and scenario. The app defaults to an incomplete exercise but
+   never locks later levels.
+2. Read the fictional e-commerce brief, CUJ, SLA, SLOs, SLIs, and error-budget
+   context. These are available as reference rather than hidden quiz answers.
+3. Activate the hidden fault only when Astronomy Shop is running, then generate
+   or observe traffic through Locust and the storefront.
+4. Investigate with Grafana and Jaeger, recording your evidence, PromQL, and
+   response plan in the app.
+5. Reveal the injected flag profile and model answer, score yourself against
+   the rubric, and save the review locally.
+6. Restore the original feature flags before starting another live scenario.
+
+## Starter curriculum
+
+| Level | Focus | Included exercises |
+| --- | --- | --- |
+| Reliability foundations | SLA/SLO/SLI language, error budgets, service tiers, and segmented reliability | Checkout contract, ads versus revenue path, invisible broken SKU |
+| Metrics, logs, traces, and PromQL | RED metrics, distributed traces, tail latency, and frontend measurement boundaries | Failed checkout trace, international shipping tail, healthy APIs/unhappy shoppers |
+| Alerting and incident response | Customer-impact triage, burn rate, and asynchronous freshness | Ambient distraction, fast burn versus slow ticket, Kafka freshness |
+| Resilience and architecture | Graceful degradation, contention, saturation, and memory drift | Recommendation fallback, catalog lock contention, slow email memory drift |
+
+The default bank uses actual Astronomy Shop flags such as `paymentFailure`,
+`cartFailure`, `kafkaQueueProblems`, `imageSlowLoad`,
+`productCatalogLockContention`, and the nested targeted
+`productCatalogFailure` rule. Its PromQL examples use the demo's
+`traces_span_metrics_calls_total` and
+`traces_span_metrics_duration_milliseconds_bucket` series.
+
 ## Start the lab
 
 Start Astronomy Shop with its observability services from the repository root:
@@ -26,6 +66,13 @@ streamlit run app.py --server.address 127.0.0.1 --server.port 8501
 
 Open <http://127.0.0.1:8501>. The app remains usable in study mode when the
 demo is stopped, but live scenario activation is disabled.
+
+Before activating a scenario, confirm the proxy and observability services are
+healthy:
+
+```bash
+docker compose -f compose.yaml -f compose.observability.yaml ps
+```
 
 The sidebar links to the local tools routed by Astronomy Shop:
 
@@ -144,4 +191,3 @@ Override local defaults with environment variables before starting Streamlit:
 python -m pip install -r requirements-dev.txt
 pytest -q
 ```
-
