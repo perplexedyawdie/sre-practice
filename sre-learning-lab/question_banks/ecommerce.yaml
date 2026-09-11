@@ -1,0 +1,664 @@
+schema_version: 1
+bank:
+  id: astronomy-shop-ecommerce-v1
+  title: Astronomy Shop E-Commerce SRE Foundations
+  description: >-
+    Twelve guided labs that progress from reliability language to telemetry-driven
+    incident response and resilient e-commerce architecture. All targets are
+    hypothetical training values rather than production commitments.
+
+levels:
+  - id: foundations
+    title: "Level 1 · Reliability foundations"
+    order: 1
+    objective: Connect business promises to critical user journeys, measurable indicators, and error budgets.
+  - id: observability
+    title: "Level 2 · Metrics, logs, traces, and PromQL"
+    order: 2
+    objective: Use RED telemetry and distributed traces to measure user-visible reliability.
+  - id: incident-response
+    title: "Level 3 · Alerting and incident response"
+    order: 3
+    objective: Triage by customer impact, calculate burn, and separate symptoms from causes.
+  - id: resilience
+    title: "Level 4 · Resilience and architecture"
+    order: 4
+    objective: Diagnose saturation and partial failure, then propose proportionate engineering controls.
+
+flag_catalog:
+  paymentFailure:
+    path: [flags, paymentFailure, defaultVariant]
+    variants: ["off", "10%", "25%", "50%", "75%", "90%", "100%"]
+    safe_variant: "off"
+  adFailure:
+    path: [flags, adFailure, defaultVariant]
+    variants: ["off", "on"]
+    safe_variant: "off"
+  adHighCpu:
+    path: [flags, adHighCpu, defaultVariant]
+    variants: ["off", "on"]
+    safe_variant: "off"
+  cartFailure:
+    path: [flags, cartFailure, defaultVariant]
+    variants: ["off", "10%", "25%", "50%", "75%", "90%", "100%"]
+    safe_variant: "off"
+  emailMemoryLeak:
+    path: [flags, emailMemoryLeak, defaultVariant]
+    variants: ["off", 1x, 10x, 100x, 1000x, 10000x]
+    safe_variant: "off"
+  imageSlowLoad:
+    path: [flags, imageSlowLoad, defaultVariant]
+    variants: ["off", 5sec, 10sec]
+    safe_variant: "off"
+  intlShippingSlowdown:
+    path: [flags, intlShippingSlowdown, defaultVariant]
+    variants: ["off", 5sec, 10sec]
+    safe_variant: "off"
+  kafkaQueueProblems:
+    path: [flags, kafkaQueueProblems, defaultVariant]
+    variants: ["off", "on"]
+    safe_variant: "off"
+  loadGeneratorFloodHomepage:
+    path: [flags, loadGeneratorFloodHomepage, defaultVariant]
+    variants: ["off", "on"]
+    safe_variant: "off"
+  paymentUnreachable:
+    path: [flags, paymentUnreachable, defaultVariant]
+    variants: ["off", "on"]
+    safe_variant: "off"
+  productCatalogFailure:
+    path: [flags, productCatalogFailure, targeting, if, 1]
+    variants: ["off", "on"]
+    safe_variant: "off"
+  productCatalogLockContention:
+    path: [flags, productCatalogLockContention, defaultVariant]
+    variants: ["off", "on"]
+    safe_variant: "off"
+  recommendationCacheFailure:
+    path: [flags, recommendationCacheFailure, defaultVariant]
+    variants: ["off", "on"]
+    safe_variant: "off"
+
+scenarios:
+  - id: checkout-contract
+    level: foundations
+    title: The checkout reliability contract
+    concepts: [SLA, SLO, SLI, error budget, critical user journey]
+    briefing: >-
+      Astronomy Shop's checkout is the revenue path. Product leadership wants a
+      customer-facing monthly availability promise, while engineering needs a
+      stricter internal target that leaves time to react before the contract is missed.
+      A small but persistent set of payment attempts has started failing.
+    critical_user_journey: A shopper submits a valid cart and receives an order confirmation.
+    service_tier: Tier 1 — revenue critical
+    sla:
+      target: 99.9% successful valid checkouts over 30 days
+      consequence: Service credits are reviewed if monthly availability falls below 99.9%.
+    slos:
+      - indicator: Checkout availability
+        target: 99.95% successful valid checkout attempts over 30 days
+    slis:
+      - name: Valid checkout success ratio
+        formula: successful valid checkout attempts / total valid checkout attempts
+        boundary: Measure at the frontend checkout API and corroborate failures in checkout/payment spans.
+    error_budget: A 99.95% 30-day SLO permits 0.05% bad events, or about 21.6 minutes if expressed as time.
+    fault_profile:
+      - flag: paymentFailure
+        variant: "10%"
+    observation_minutes: 5
+    tasks:
+      - Explain why valid attempts—not every request reaching the endpoint—belong in the denominator.
+      - Compare observed payment errors with the contractual and internal targets.
+      - Decide whether the budget burn warrants investigation, paging, or a slower follow-up.
+    hints:
+      - Start from the checkout user journey, then follow its server spans toward payment.
+      - Error budget is 1 minus the SLO; burn rate compares observed bad-event rate with that budget fraction.
+      - A 10% failure rate against a 0.05% budget is roughly a 200x burn while the fault is present.
+    solution:
+      root_cause: A fractional payment failure is rejecting approximately one in ten charge attempts.
+      investigation: >-
+        Confirm checkout impact first, compare good and total checkout-related spans, then open failed
+        checkout traces and find the payment span. Exclude malformed or synthetic-invalid requests from
+        the business SLI even if they appear in raw endpoint counts.
+      remediation: Disable the payment failure, verify recovery, protect the checkout SLO, and escalate to the payment owner if the failure is not an intentional experiment.
+      learning_notes: SLA is the external promise, SLO is the tighter engineering target, and SLI is the measurement—not a synonym for either target.
+      promql:
+        - '1 - (sum(rate(traces_span_metrics_calls_total{service_name="payment",status_code="STATUS_CODE_ERROR"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name="payment"}[5m])))'
+        - 'sum(rate(traces_span_metrics_calls_total{service_name="payment",status_code="STATUS_CODE_ERROR"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name="payment"}[5m])) / 0.0005'
+      expected_evidence:
+        - Payment error spans rise while request traffic continues.
+        - Failed checkout traces contain an error in the payment portion of the call chain.
+    rubric:
+      - {id: user-boundary, criterion: I defined success at the checkout user boundary., points: 25}
+      - {id: valid-events, criterion: I distinguished valid attempts from all raw requests., points: 25}
+      - {id: budget-math, criterion: I calculated or interpreted the error-budget burn., points: 25}
+      - {id: trace-proof, criterion: I used trace evidence to connect checkout failures to payment., points: 25}
+
+  - id: tiered-reliability
+    level: foundations
+    title: Revenue path versus auxiliary ads
+    concepts: [critical user journey, service tiers, graceful degradation, prioritization]
+    briefing: >-
+      Ads are failing on product pages, but browsing, cart, and checkout remain available.
+      A stakeholder asks for the ad service to receive the same reliability commitment as checkout.
+      Assess the incident and explain where engineering effort belongs.
+    critical_user_journey: A shopper discovers a product and completes checkout; ads are optional enrichment.
+    service_tier: Compare Tier 1 checkout with Tier 3 advertising
+    sla:
+      target: 99.9% successful valid checkouts over 30 days; no external ad-delivery SLA
+      consequence: Checkout misses may trigger credits; ad misses reduce secondary revenue but must not block purchasing.
+    slos:
+      - {indicator: Checkout availability, target: 99.95% over 30 days}
+      - {indicator: Ad response availability, target: 99.0% over 30 days with graceful omission}
+    slis:
+      - {name: Checkout success ratio, formula: successful valid checkouts / valid checkout attempts, boundary: frontend checkout API}
+      - {name: Ad success ratio, formula: successful ad responses / valid ad requests, boundary: ad RPC server}
+    error_budget: Checkout has a 0.05% internal bad-event budget; ads have a separate 1% budget and should never consume checkout's budget.
+    fault_profile:
+      - flag: adFailure
+        variant: "on"
+    observation_minutes: 4
+    tasks:
+      - Verify that the ad failure does not break the checkout CUJ.
+      - Explain why one global availability number would create the wrong priority.
+      - Recommend a customer-safe degraded behavior and alert severity.
+    hints:
+      - Filter the spanmetrics dashboard by ad, then independently inspect checkout.
+      - A component can be very unhealthy while the critical user journey remains reliable.
+      - The correct product behavior is usually to omit the ad slot rather than fail the page.
+    solution:
+      root_cause: The ad service is intentionally failing, but it is outside the core purchase path.
+      investigation: Establish that ad errors are isolated, check frontend and checkout success, and verify traces do not turn the optional dependency into a page or checkout failure.
+      remediation: Fail open by hiding the ad component, notify the owning team at non-page urgency, and keep Tier 1 capacity and paging policy separate.
+      learning_notes: Reliability is allocated by user journey and business impact; infrastructure redness alone does not define incident severity.
+      promql:
+        - 'sum(rate(traces_span_metrics_calls_total{service_name="ad",status_code="STATUS_CODE_ERROR"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name="ad"}[5m]))'
+        - 'sum(rate(traces_span_metrics_calls_total{service_name="checkout",status_code="STATUS_CODE_ERROR"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name="checkout"}[5m]))'
+      expected_evidence:
+        - The ad service shows errors while checkout remains near baseline.
+        - Traces show the optional ad call without a corresponding checkout-path failure.
+    rubric:
+      - {id: tiering, criterion: I classified checkout and ads into different reliability tiers., points: 25}
+      - {id: separate-slis, criterion: I evaluated separate SLIs instead of a global average., points: 25}
+      - {id: degradation, criterion: I proposed hiding ads rather than failing the user journey., points: 25}
+      - {id: severity, criterion: I selected urgency based on customer impact., points: 25}
+
+  - id: segmented-catalog
+    level: foundations
+    title: The invisible broken SKU
+    concepts: [segmented SLI, aggregation, Simpson's paradox, cardinality]
+    briefing: >-
+      Overall catalog availability looks excellent, yet every shopper who requests product
+      OLJCESPC7Z fails. The global request volume makes this cohort almost invisible.
+      Determine whether the service is reliable and how to represent the affected customer slice.
+    critical_user_journey: A shopper can view and purchase the specific product they selected.
+    service_tier: Tier 2 — discovery and conversion
+    sla:
+      target: 99.5% successful valid product-detail requests over 30 days
+      consequence: Persistent widespread misses trigger a commercial review; individual-SKU impact still requires incident ownership.
+    slos:
+      - {indicator: Global catalog availability, target: 99.9% over 30 days}
+      - {indicator: Per-SKU availability guardrail, target: No active SKU below 99.0% over 15 minutes at meaningful traffic}
+    slis:
+      - {name: Segmented product availability, formula: successful detail requests by product ID / valid detail requests by product ID, boundary: product-catalog RPC}
+    error_budget: The global budget can remain healthy while one cohort consumes its entire local guardrail; both views are necessary.
+    fault_profile:
+      - flag: productCatalogFailure
+        variant: "on"
+    observation_minutes: 5
+    tasks:
+      - Find evidence that impact is concentrated rather than global.
+      - Discuss the value and cardinality cost of adding a product dimension.
+      - Propose a low-cardinality alert or drill-down strategy.
+    hints:
+      - Exercise product OLJCESPC7Z manually if random load does not hit it often.
+      - Start with traces and span attributes before deciding which dimensions belong permanently in metrics.
+      - A top-N or business-category drill-down can be safer than placing every product ID on paging metrics.
+    solution:
+      root_cause: The targeted catalog flag fails requests only when product_id equals OLJCESPC7Z.
+      investigation: Compare global catalog errors with failed traces for the affected SKU and prove the cohort has total failure despite a healthy aggregate.
+      remediation: Disable the targeted fault, validate the SKU, and use traces/logs for high-cardinality diagnosis while designing bounded metric segmentation.
+      learning_notes: Aggregation can erase user harm. Segment deliberately, but do not turn unbounded identifiers into uncontrolled Prometheus cardinality.
+      promql:
+        - 'sum(rate(traces_span_metrics_calls_total{service_name="product-catalog",status_code="STATUS_CODE_ERROR"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name="product-catalog"}[5m]))'
+      expected_evidence:
+        - Global product-catalog error rate may remain small.
+        - Failed traces for the affected request carry demo.product.id or product_id evidence for OLJCESPC7Z.
+    rubric:
+      - {id: cohort, criterion: I proved that impact is concentrated on one SKU., points: 25}
+      - {id: aggregate-risk, criterion: I explained why the global SLI hides the failure., points: 25}
+      - {id: cardinality, criterion: I discussed the product-ID cardinality trade-off., points: 25}
+      - {id: guardrail, criterion: I proposed a bounded cohort guardrail or drill-down., points: 25}
+
+  - id: checkout-red-trace
+    level: observability
+    title: Follow a failed checkout through RED telemetry
+    concepts: [RED method, distributed tracing, service graph, evidence chain]
+    briefing: >-
+      Checkout conversions suddenly fall. You have rate, error, and duration metrics plus
+      distributed traces, but no trustworthy incident message. Build an evidence chain from
+      the customer symptom to the failing dependency.
+    critical_user_journey: Submit cart, charge payment, reserve shipping, and receive confirmation.
+    service_tier: Tier 1 — revenue critical
+    sla:
+      target: 99.9% successful valid checkouts over 30 days
+      consequence: A sustained miss risks revenue loss and contractual review.
+    slos:
+      - {indicator: Checkout availability, target: 99.95% over 30 days}
+      - {indicator: Checkout latency, target: 95% of valid checkouts complete within 1 second over 30 days}
+    slis:
+      - {name: Checkout RED indicators, formula: request rate plus error ratio plus latency distribution, boundary: checkout server and downstream spans}
+    error_budget: Availability permits 0.05% failed valid attempts; latency permits 5% slower than one second.
+    fault_profile:
+      - flag: paymentFailure
+        variant: "50%"
+    observation_minutes: 4
+    tasks:
+      - Use metrics to identify when and where errors increased.
+      - Open a failed trace and name the first failing service/span, not merely the top-level symptom.
+      - Explain what metrics prove and what the trace adds.
+    hints:
+      - Filter spanmetrics by checkout and payment before searching Jaeger.
+      - In Jaeger, start at frontend or checkout and restrict to errors.
+      - The root span reports user impact; the earliest downstream error usually localizes the cause.
+    solution:
+      root_cause: Half of payment charge evaluations are failing, propagating failure into checkout.
+      investigation: Use spanmetrics to establish the error spike and affected services, then compare successful and failed checkout traces and locate the payment error span.
+      remediation: Restore payment behavior, confirm error rate falls, and retain trace IDs as incident evidence for the owning team.
+      learning_notes: Metrics tell you the size and timing of a problem; traces explain the path and dependency where an individual request failed.
+      promql:
+        - 'sum by (service_name) (rate(traces_span_metrics_calls_total{status_code="STATUS_CODE_ERROR",service_name=~"checkout|payment"}[5m]))'
+        - 'sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~"checkout|payment"}[5m]))'
+      expected_evidence:
+        - Payment and checkout error rates rise together.
+        - Failed traces show checkout calling payment before the error propagates toward the frontend.
+    rubric:
+      - {id: rate, criterion: I checked request rate before interpreting error counts., points: 25}
+      - {id: metric-scope, criterion: I identified checkout and payment in RED metrics., points: 25}
+      - {id: trace-root, criterion: I found the first failing downstream span., points: 25}
+      - {id: evidence-chain, criterion: I connected customer symptom, metric change, and trace cause., points: 25}
+
+  - id: shipping-tail
+    level: observability
+    title: International shipping hides in the tail
+    concepts: [histograms, p95 latency, averages, cohorts]
+    briefing: >-
+      Average shipping latency still looks acceptable, but international shoppers report long
+      checkout pauses. Determine whether the latency objective is being met and why the mean is
+      the wrong summary for this failure shape.
+    critical_user_journey: A shopper obtains a shipping quote while completing checkout.
+    service_tier: Tier 1 dependency — checkout latency
+    sla:
+      target: 99.9% checkout availability over 30 days; no contractual latency penalty in this exercise
+      consequence: Slow checkout still reduces conversion and is treated as a product-impacting incident.
+    slos:
+      - {indicator: Shipping server latency, target: 95% of valid shipping calls complete within 500 ms over 30 days}
+    slis:
+      - {name: Shipping latency distribution, formula: proportion of valid shipping spans at or below 500 ms, boundary: shipping server spans segmented by route/context when possible}
+    error_budget: Up to 5% of valid shipping calls may exceed 500 ms; a whole geographic cohort should also have a guardrail.
+    fault_profile:
+      - flag: intlShippingSlowdown
+        variant: 5sec
+    observation_minutes: 5
+    tasks:
+      - Compare p50, p95, and average latency for shipping.
+      - Find a slow trace and identify the delayed shipping span.
+      - Explain how geography creates a bimodal distribution.
+    hints:
+      - Use histogram_quantile rather than averaging bucket boundaries.
+      - The load generator includes different shipping destinations; manual international checkout can make the signal clearer.
+      - A low p50 and high p95 is consistent with a minority cohort receiving a fixed delay.
+    solution:
+      root_cause: International shipping responses are deliberately delayed by five seconds while domestic calls remain fast.
+      investigation: Compare latency quantiles, inspect the distribution over time, and open a high-duration checkout trace to locate the shipping server span.
+      remediation: Remove the delay, validate both cohorts, and establish a geographic or route guardrail that avoids hiding concentrated latency.
+      learning_notes: Means flatten bimodal behavior. Percentiles reveal tail impact but still require segmentation to say which users are harmed.
+      promql:
+        - 'histogram_quantile(0.95, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name="shipping"}[5m])))'
+        - 'sum(rate(traces_span_metrics_duration_milliseconds_sum{service_name="shipping"}[5m])) / sum(rate(traces_span_metrics_duration_milliseconds_count{service_name="shipping"}[5m]))'
+      expected_evidence:
+        - Shipping p95 approaches the injected five-second delay while p50 can remain near baseline.
+        - Slow checkout traces spend most of their time in the shipping call.
+    rubric:
+      - {id: quantiles, criterion: I compared p50 and p95 rather than relying on average alone., points: 25}
+      - {id: histogram, criterion: I used histogram_quantile correctly over rate buckets., points: 25}
+      - {id: slow-trace, criterion: I found the shipping span in a slow trace., points: 25}
+      - {id: cohort-shape, criterion: I explained the bimodal international cohort., points: 25}
+
+  - id: browser-boundary
+    level: observability
+    title: Healthy APIs, unhappy shoppers
+    concepts: [measurement boundary, real-user perception, client telemetry, Core Web Vitals]
+    briefing: >-
+      Backend RPC dashboards are green, yet product cards feel broken because images appear many
+      seconds late. Decide where the SLI must be measured and why internal service latency alone
+      cannot represent the shopping experience.
+    critical_user_journey: A shopper visually discovers products on the storefront.
+    service_tier: Tier 2 — discovery and conversion
+    sla:
+      target: 99.5% storefront availability over 30 days
+      consequence: Extended user-visible degradation triggers product incident review even when APIs return 200.
+    slos:
+      - {indicator: Product-page visual readiness, target: 90% of page views reach acceptable LCP within 2.5 seconds over 28 days}
+      - {indicator: Image delivery latency, target: 95% of product image requests complete within 800 ms over 30 days}
+    slis:
+      - {name: User-perceived visual latency, formula: page views with LCP <= 2.5s / eligible page views, boundary: browser telemetry}
+    error_budget: Ten percent of eligible page views may exceed the LCP threshold, but backend 200 responses are not automatically good events.
+    fault_profile:
+      - flag: imageSlowLoad
+        variant: 5sec
+    observation_minutes: 4
+    tasks:
+      - Verify the storefront symptom manually.
+      - Compare frontend/browser and backend observations.
+      - Select the correct SLI boundary and propose supporting telemetry.
+    hints:
+      - Open the storefront after activation; this fault is driven through browser image requests.
+      - Check whether backend status codes remain successful despite duration increasing at the proxy/image path.
+      - LCP or resource timing belongs closer to the user than an internal product-catalog span.
+    solution:
+      root_cause: The browser adds an Envoy fault-delay header to product image requests, delaying visual content without making core APIs fail.
+      investigation: Reproduce in the browser, inspect image/frontend-proxy duration, and confirm product-catalog RPC health stays normal.
+      remediation: Remove the delay and define browser-side performance SLIs, using backend telemetry as diagnostic evidence rather than the sole customer SLI.
+      learning_notes: Measure reliability at the boundary where the user experiences it. Successful backends do not guarantee a usable frontend.
+      promql:
+        - 'histogram_quantile(0.95, sum by (le,service_name) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~"frontend-proxy|image-provider"}[5m])))'
+      expected_evidence:
+        - Product images arrive roughly five seconds late while product data and other APIs remain responsive.
+        - Traces or proxy telemetry localize duration to the image request path rather than product-catalog.
+    rubric:
+      - {id: reproduce, criterion: I reproduced the user-visible symptom., points: 25}
+      - {id: boundary, criterion: I selected a browser/user boundary for the primary SLI., points: 25}
+      - {id: backend-contrast, criterion: I proved backend success did not equal visual readiness., points: 25}
+      - {id: telemetry, criterion: I proposed browser timing plus backend diagnostic telemetry., points: 25}
+
+  - id: ambient-distraction
+    level: incident-response
+    title: Revenue burn behind noisy infrastructure
+    concepts: [symptom alerting, noise, incident prioritization, cognitive bias]
+    briefing: >-
+      Multiple dashboards turn red at once: ads are failing, ad CPU is saturated, and checkout
+      customers report errors. You are primary on-call. Establish the incident priority and avoid
+      anchoring on the loudest infrastructure chart.
+    critical_user_journey: Complete checkout and payment during active customer traffic.
+    service_tier: Tier 1 checkout with Tier 3 noise
+    sla:
+      target: 99.9% successful valid checkouts over 30 days
+      consequence: Sustained checkout impact risks direct revenue loss and contractual consequences.
+    slos:
+      - {indicator: Checkout availability, target: 99.95% over 30 days}
+      - {indicator: Ad availability, target: 99.0% over 30 days with fail-open behavior}
+    slis:
+      - {name: CUJ-weighted checkout availability, formula: successful valid checkouts / valid checkout attempts, boundary: frontend checkout API}
+    error_budget: Checkout's 0.05% budget drives paging; ad CPU and errors are diagnostic signals on a separate budget.
+    fault_profile:
+      - flag: paymentFailure
+        variant: "50%"
+      - flag: adFailure
+        variant: "on"
+      - flag: adHighCpu
+        variant: "on"
+    observation_minutes: 5
+    tasks:
+      - State the first dashboard or query you use and why.
+      - Identify the revenue-impacting fault before investigating ad CPU.
+      - Draft the first incident update and immediate containment action.
+    hints:
+      - Rank evidence by customer journey, not visual redness.
+      - Compare checkout/payment error ratios independently from ads.
+      - A failed payment span explains lost checkouts; high ad CPU does not.
+    solution:
+      root_cause: Payment failures are burning the checkout budget; ad errors and high CPU are simultaneous auxiliary noise.
+      investigation: Confirm checkout SLI impact, trace failed transactions to payment, then record ad degradation as a secondary workstream without letting it delay containment.
+      remediation: Restore payment first, fail ads open, declare ownership and impact, then investigate ad CPU after the revenue path stabilizes.
+      learning_notes: Page on symptoms that threaten an SLO. Cause signals help debugging but often produce noisy and misprioritized pages.
+      promql:
+        - 'sum(rate(traces_span_metrics_calls_total{service_name="payment",status_code="STATUS_CODE_ERROR"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name="payment"}[5m]))'
+        - 'sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~"ad|checkout|payment",status_code="STATUS_CODE_ERROR"}[5m]))'
+      expected_evidence:
+        - Failed checkout traces converge on payment errors.
+        - Ad errors and CPU are real but do not explain the checkout call-chain failure.
+    rubric:
+      - {id: symptom-first, criterion: I began with checkout customer impact., points: 25}
+      - {id: payment-cause, criterion: I identified payment as the revenue-path cause., points: 25}
+      - {id: noise, criterion: I treated ad CPU/errors as a separate lower-priority issue., points: 25}
+      - {id: containment, criterion: I proposed payment containment before deep cause analysis., points: 25}
+
+  - id: burn-rate
+    level: incident-response
+    title: Fast burn or slow ticket?
+    concepts: [burn rate, multi-window alerting, paging, error-budget policy]
+    briefing: >-
+      Cart requests are failing intermittently. A five-minute graph looks alarming, but you must
+      decide whether this is a transient spike, a fast-burn page, or a slower budget trend that
+      belongs in planned work.
+    critical_user_journey: Add, update, and retain items in a shopper's cart.
+    service_tier: Tier 1 — prerequisite to checkout
+    sla:
+      target: 99.9% successful valid cart operations over 30 days
+      consequence: Material monthly misses trigger commercial and reliability review.
+    slos:
+      - {indicator: Cart availability, target: 99.95% over 30 days}
+    slis:
+      - {name: Cart good-event ratio, formula: successful valid cart RPCs / valid cart RPCs, boundary: cart RPC server}
+    error_budget: The allowed bad-event fraction is 0.05%; a 25% observed error ratio burns at roughly 500x while active.
+    fault_profile:
+      - flag: cartFailure
+        variant: "25%"
+    observation_minutes: 6
+    tasks:
+      - Calculate approximate burn rate from the observed error ratio.
+      - Compare a short and longer window and explain why both are needed.
+      - Choose page versus ticket and state the recovery condition.
+    hints:
+      - Burn rate equals observed bad-event fraction divided by the allowed bad-event fraction.
+      - A short window detects quickly; a confirming long window reduces sensitivity to one spike.
+      - A sustained hundreds-times burn on a Tier 1 path should page even if the monthly aggregate still looks healthy.
+    solution:
+      root_cause: One quarter of cart operations are intentionally directed to a failing cart store.
+      investigation: Measure cart error ratios over 5m and 1h, compute burn against 0.0005, and corroborate user impact in cart traces.
+      remediation: Page and disable the failure if both windows confirm sustained impact; verify error recovery and record budget consumed during the event.
+      learning_notes: Multi-window alerts combine speed and confidence. Monthly SLO compliance alone reacts far too late for fast burns.
+      promql:
+        - 'sum(rate(traces_span_metrics_calls_total{service_name="cart",status_code="STATUS_CODE_ERROR"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name="cart"}[5m])) / 0.0005'
+        - 'sum(rate(traces_span_metrics_calls_total{service_name="cart",status_code="STATUS_CODE_ERROR"}[1h])) / sum(rate(traces_span_metrics_calls_total{service_name="cart"}[1h])) / 0.0005'
+      expected_evidence:
+        - Cart error ratios rise toward the configured fractional failure under sufficient traffic.
+        - Both short and long windows rise if the experiment runs long enough; the short window moves first.
+    rubric:
+      - {id: burn-formula, criterion: I divided observed failure ratio by the allowed budget fraction., points: 25}
+      - {id: windows, criterion: I compared short and long windows., points: 25}
+      - {id: page, criterion: I selected paging for sustained Tier 1 fast burn., points: 25}
+      - {id: recovery, criterion: I defined a measurable recovery condition., points: 25}
+
+  - id: async-freshness
+    level: incident-response
+    title: Checkout succeeds, fulfillment falls behind
+    concepts: [asynchronous SLI, freshness, queue lag, user communication]
+    briefing: >-
+      Shoppers receive order confirmations and payments complete, but fraud-processing events
+      accumulate in Kafka. HTTP status dashboards look healthy. Define the incident using an
+      asynchronous freshness objective instead of forcing it into a request-availability model.
+    critical_user_journey: Place an order now and have downstream order processing become current promptly.
+    service_tier: Tier 1 synchronous acceptance with Tier 2 asynchronous processing
+    sla:
+      target: 99.9% successful order acceptance over 30 days
+      consequence: Accepted orders must not be lost; prolonged fulfillment delay requires customer and operations communication.
+    slos:
+      - {indicator: Fraud-event freshness, target: 99% of accepted order events consumed within 30 seconds over 7 days}
+    slis:
+      - {name: Event freshness ratio, formula: events consumed within 30 seconds / valid events published, boundary: checkout producer to fraud-detection consumer}
+    error_budget: Up to 1% of valid events may exceed 30 seconds; HTTP 200 responses do not count as evidence that this objective is met.
+    fault_profile:
+      - flag: kafkaQueueProblems
+        variant: "on"
+    observation_minutes: 8
+    tasks:
+      - Verify that synchronous checkout can remain successful.
+      - Find evidence of producer/consumer delay or widening trace/event time gaps.
+      - Define paging and customer-communication thresholds for lag.
+    hints:
+      - Separate order acceptance from downstream freshness; they need different SLIs.
+      - Inspect checkout producer and fraud-detection consumer telemetry and logs.
+      - Think in event age, oldest unprocessed event, and drain time—not HTTP status.
+    solution:
+      root_cause: Checkout produces extra Kafka events while fraud detection sleeps during consumption, causing growing lag.
+      investigation: Confirm healthy synchronous checkout, then examine producer volume, consumer throughput, event timing, and backlog growth to establish a freshness breach.
+      remediation: Disable overload/delay, protect consumers with capacity and backpressure, estimate drain time, and communicate delayed downstream processing without claiming orders were rejected.
+      learning_notes: Async systems need timeliness, completeness, and durability SLIs. Request success is only the first half of the user promise.
+      promql:
+        - 'sum(rate(traces_span_metrics_calls_total{service_name="checkout",status_code="STATUS_CODE_ERROR"}[5m])) / sum(rate(traces_span_metrics_calls_total{service_name="checkout"}[5m]))'
+        - 'sum by (span_name) (rate(traces_span_metrics_calls_total{service_name=~"checkout|fraud-detection"}[5m]))'
+      expected_evidence:
+        - Checkout can remain available while fraud-detection consumption slows.
+        - Kafka-related logs or spans show excess publishing and one-second consumer delays.
+    rubric:
+      - {id: split-slis, criterion: I separated synchronous acceptance from async freshness., points: 25}
+      - {id: freshness, criterion: I defined a measurable event-age or consumption-time SLI., points: 25}
+      - {id: queue-proof, criterion: I sought producer, consumer, and backlog evidence., points: 25}
+      - {id: communication, criterion: I described impact without falsely saying checkout was down., points: 25}
+
+  - id: recommendation-degradation
+    level: resilience
+    title: Recommendations degrade without blocking sales
+    concepts: [graceful degradation, cache behavior, dependency isolation, tiered SLO]
+    briefing: >-
+      Recommendation cache behavior becomes unreliable and the service repeatedly refreshes
+      product data. Protect browsing and checkout while preserving enough evidence to fix the
+      auxiliary service.
+    critical_user_journey: Browse products and complete purchase even when personalization is degraded.
+    service_tier: Tier 3 — auxiliary personalization
+    sla:
+      target: 99.9% successful checkout over 30 days; recommendations have no contractual commitment
+      consequence: Recommendation loss may reduce conversion but must not block the purchase path.
+    slos:
+      - {indicator: Recommendation availability, target: 99.0% over 30 days with empty/stale fallback}
+      - {indicator: Checkout availability, target: 99.95% over 30 days independent of recommendations}
+    slis:
+      - {name: Recommendation fallback success, formula: recommendation requests served with fresh, stale, or empty valid responses / valid requests, boundary: frontend recommendation component}
+    error_budget: Recommendations may consume a 1% auxiliary budget; their faults must not spend checkout's 0.05% budget.
+    fault_profile:
+      - flag: recommendationCacheFailure
+        variant: "on"
+    observation_minutes: 6
+    tasks:
+      - Determine how cache misses change dependency traffic and resource behavior.
+      - Verify browsing and checkout remain usable.
+      - Propose fallback, timeout, and isolation behavior.
+    hints:
+      - Compare recommendation and product-catalog rate/duration.
+      - Check whether repeated misses grow cached state and add downstream calls.
+      - Returning no recommendations is usually safer than holding up the whole page.
+    solution:
+      root_cause: Recommendation cache failures cause repeated product-catalog refreshes and accumulation in cached state.
+      investigation: Correlate recommendation cache-miss evidence with added catalog traffic and resource/latency drift while checking that the purchase CUJ remains healthy.
+      remediation: Bound cache growth, apply request timeouts, serve stale or empty recommendations, and isolate auxiliary failure from page and checkout success.
+      learning_notes: Graceful degradation is an explicit product contract, not merely catching an exception.
+      promql:
+        - 'sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~"recommendation|product-catalog"}[5m]))'
+        - 'histogram_quantile(0.95, sum by (le,service_name) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=~"recommendation|product-catalog"}[5m])))'
+      expected_evidence:
+        - Recommendation cache-miss traces call product-catalog more frequently.
+        - Checkout can remain healthy even if recommendation latency or resource use drifts.
+    rubric:
+      - {id: dependency, criterion: I traced the cache problem to increased catalog work., points: 25}
+      - {id: cuj-check, criterion: I separately verified the purchase journey., points: 25}
+      - {id: fallback, criterion: I proposed stale or empty recommendation fallback., points: 25}
+      - {id: isolation, criterion: I included timeout and resource-boundary controls., points: 25}
+
+  - id: catalog-contention
+    level: resilience
+    title: Database contention becomes a latency incident
+    concepts: [saturation, lock contention, cascading failure, retry control]
+    briefing: >-
+      Product catalog calls slow under database lock contention. Upstream services wait longer,
+      concurrent work grows, and naive retries threaten to amplify the incident. Diagnose the
+      bottleneck and design containment before adding capacity blindly.
+    critical_user_journey: Browse product details and prepare order items during checkout.
+    service_tier: Tier 2 catalog with Tier 1 checkout dependency
+    sla:
+      target: 99.9% successful valid checkouts over 30 days
+      consequence: Catalog latency becomes Tier 1 impact when it prevents order completion.
+    slos:
+      - {indicator: Product-catalog latency, target: 95% of valid RPCs complete within 300 ms over 30 days}
+      - {indicator: Checkout latency, target: 95% of valid checkouts complete within 1 second over 30 days}
+    slis:
+      - {name: Catalog tail-latency ratio, formula: valid catalog calls <= 300 ms / valid catalog calls, boundary: product-catalog RPC server}
+    error_budget: Five percent of catalog calls may exceed 300 ms, but correlated checkout impact raises incident priority.
+    fault_profile:
+      - flag: productCatalogLockContention
+        variant: "on"
+    observation_minutes: 7
+    tasks:
+      - Identify whether time is spent in the service, network, or database.
+      - Explain how queues, concurrency, and retries can form a feedback loop.
+      - Propose containment and a durable fix.
+    hints:
+      - Compare product-catalog span duration with PostgreSQL dashboard activity.
+      - Look for checkout/recommendation callers waiting on the same dependency.
+      - More replicas do not remove a contended database lock and may increase pressure.
+    solution:
+      root_cause: Product-catalog deliberately holds a database lock, serializing work and inflating tail latency for callers.
+      investigation: Use p95 latency to identify product-catalog, inspect traces for database time, and correlate with PostgreSQL lock/activity evidence and upstream waiting.
+      remediation: Disable the fault, limit concurrency and retries, apply deadlines/circuit breaking, and fix transaction/locking scope rather than scaling callers blindly.
+      learning_notes: Saturation is often a queueing problem. Retry and autoscaling feedback can make a constrained shared dependency worse.
+      promql:
+        - 'histogram_quantile(0.95, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name="product-catalog"}[5m])))'
+        - 'sum by (service_name) (rate(traces_span_metrics_calls_total{service_name=~"product-catalog|checkout|recommendation"}[5m]))'
+      expected_evidence:
+        - Product-catalog tail latency rises and upstream traces wait on its RPC/database work.
+        - PostgreSQL telemetry shows activity consistent with contention rather than network errors.
+    rubric:
+      - {id: bottleneck, criterion: I localized delay to catalog/database work., points: 25}
+      - {id: cascade, criterion: I identified affected upstream callers., points: 25}
+      - {id: feedback, criterion: I explained why retries or extra concurrency can amplify contention., points: 25}
+      - {id: controls, criterion: I proposed deadlines, bounded retries, and a locking fix., points: 25}
+
+  - id: slow-memory-drift
+    level: resilience
+    title: The slow memory drift after checkout
+    concepts: [memory leak, capacity, time horizon, symptom versus cause]
+    briefing: >-
+      Checkout still succeeds, but email-service memory rises after order confirmations. There is
+      no immediate crash, and a short incident window can look harmless. Decide how to prove a
+      leak, forecast exhaustion, and protect the synchronous purchase path.
+    critical_user_journey: Confirm an order immediately; deliver the confirmation email asynchronously without exhausting the worker.
+    service_tier: Tier 1 order confirmation with Tier 3 email delivery worker
+    sla:
+      target: 99.9% successful valid checkouts over 30 days
+      consequence: Email delay alone is not checkout downtime, but worker exhaustion can create operational and communication impact.
+    slos:
+      - {indicator: Checkout availability, target: 99.95% over 30 days}
+      - {indicator: Confirmation-email timeliness, target: 99% of confirmations processed within 60 seconds over 7 days}
+    slis:
+      - {name: Email freshness ratio, formula: confirmations processed within 60 seconds / valid order-confirmation events, boundary: checkout event to email completion}
+      - {name: Memory safety guardrail, formula: email container working set and growth rate, boundary: container resource telemetry}
+    error_budget: One percent of emails may exceed 60 seconds; memory growth is a diagnostic guardrail rather than the customer-facing SLI.
+    fault_profile:
+      - flag: emailMemoryLeak
+        variant: 100x
+    observation_minutes: 10
+    tasks:
+      - Generate or wait for checkout traffic and inspect email memory over time.
+      - Separate the customer SLI from the infrastructure leading indicator.
+      - Estimate time to exhaustion and propose containment plus a durable fix.
+    hints:
+      - A leak is a trend; compare slope over several email events rather than one memory sample.
+      - Use the Docker/host metrics dashboard and email traces together.
+      - Restarting clears memory temporarily but does not fix retained allocations.
+    solution:
+      root_cause: Each email retains an inflated confirmation body, producing sustained memory growth at a conservative 100x multiplier.
+      investigation: Correlate completed checkout/email events with monotonic email-container memory growth and check whether processing latency or restarts begin to appear.
+      remediation: Disable the leak, restart only if required for immediate safety, bound allocations, fix retention, and alert on forecast exhaustion or freshness burn rather than one static memory threshold.
+      learning_notes: Resource metrics are valuable causal and predictive signals, while the page-worthy symptom remains user-visible availability or freshness risk.
+      promql:
+        - 'sum(rate(traces_span_metrics_calls_total{service_name="email"}[5m]))'
+        - 'histogram_quantile(0.95, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name="email"}[5m])))'
+      expected_evidence:
+        - Email calls continue while the email container's memory trend rises with processed confirmations.
+        - Checkout can remain successful before memory pressure becomes severe.
+    rubric:
+      - {id: trend, criterion: I used repeated observations to establish a memory-growth trend., points: 25}
+      - {id: correlation, criterion: I correlated growth with email/checkout events., points: 25}
+      - {id: sli-vs-cause, criterion: I separated freshness/availability SLIs from memory diagnostics., points: 25}
+      - {id: mitigation, criterion: I proposed immediate containment and a durable allocation fix., points: 25}
